@@ -10,6 +10,7 @@ This module provides envoy awesomeness.
 import os
 import sys
 import shlex
+import glob
 import signal
 import subprocess
 import threading
@@ -30,17 +31,20 @@ def _terminate_process(process):
     else:
         os.kill(process.pid, signal.SIGTERM)
 
+
 def _kill_process(process):
-   if sys.platform == 'win32':
-       _terminate_process(process)
-   else:
-       os.kill(process.pid, signal.SIGKILL)
+    if sys.platform == 'win32':
+        _terminate_process(process)
+    else:
+        os.kill(process.pid, signal.SIGKILL)
+
 
 def _is_alive(thread):
     if hasattr(thread, "is_alive"):
         return thread.is_alive()
     else:
         return thread.isAlive()
+
 
 class Command(object):
     def __init__(self, cmd):
@@ -73,13 +77,12 @@ class Command(object):
 
                 if sys.version_info[0] >= 3:
                     self.out, self.err = self.process.communicate(
-                        input = bytes(self.data, "UTF-8") if self.data else None 
+                        input=bytes(self.data, "UTF-8") if self.data else None
                     )
                 else:
                     self.out, self.err = self.process.communicate(self.data)
             except Exception as exc:
                 self.exc = exc
-              
 
         thread = threading.Thread(target=target)
         thread.start()
@@ -87,7 +90,7 @@ class Command(object):
         thread.join(timeout)
         if self.exc:
             raise self.exc
-        if _is_alive(thread) :
+        if _is_alive(thread):
             _terminate_process(self.process)
             thread.join(kill_timeout)
             if _is_alive(thread):
@@ -139,12 +142,12 @@ class ConnectedCommand(object):
 
     def send(self, str, end='\n'):
         """Sends a line to std_in."""
-        return self._process.stdin.write(str+end)
+        return self._process.stdin.write(str + end)
 
     def block(self):
         """Blocks until command finishes. Returns Response instance."""
         self._status_code = self._process.wait()
-
+#
 
 
 class Response(object):
@@ -160,7 +163,6 @@ class Response(object):
         self.status_code = None
         self.history = []
 
-
     def __repr__(self):
         if len(self.command):
             return '<Response [{0}]>'.format(self.command[0])
@@ -168,7 +170,7 @@ class Response(object):
             return '<Response>'
 
 
-def expand_args(command):
+def expand_args(command, globbing=False):
     """Parses command strings and returns a Popen-ready list."""
 
     # Prepare arguments.
@@ -186,24 +188,36 @@ def expand_args(command):
                 break
 
         command = list(map(shlex.split, command))
+        # yak: Experimental:
+        #   glob:  replace every command in the pipeline:
+        if globbing is True:
+            for i in range(len(command)):
+                xcmd = [command[i][0]]   # never glob the command itself;
+                for j in range(1,len(command[i])):  # everything else on the line
+                    n = glob.glob(command[i][j])  # if it expands, use that
+                    xcmd += n if len(n)>0 else command[i][j]
+                command[i] = xcmd  # replace w/ expanded-globbed command line
 
     return command
 
 
-def run(command, data=None, timeout=None, kill_timeout=None, env=None, cwd=None):
+def run(command, data=None, timeout=None, kill_timeout=None, env=None, cwd=None, globbing=False):
     """Executes a given commmand and returns Response.
 
     Blocks until process is complete, or timeout is reached.
     """
 
-    command = expand_args(command)
-
+    command = expand_args(command, globbing)
+    # handle flubbed-up calls gracefully
+    if not command:
+        return Response()
+    
     history = []
     for c in command:
 
         if len(history):
             # due to broken pipe problems pass only first 10 KiB
-            data = history[-1].std_out[0:10*1024]
+            data = history[-1].std_out[0: 10 * 1024]
 
         cmd = Command(c)
         out, err = cmd.run(data, timeout, kill_timeout, env, cwd)
